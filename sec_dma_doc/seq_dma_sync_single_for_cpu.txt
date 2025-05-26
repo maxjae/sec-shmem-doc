@@ -1,0 +1,22 @@
+participantspacing equal
+participant Kernel
+rparticipant "Shared\nmemory" as shmem
+participant Proxy
+
+activate Kernel
+[->Kernel:dma_sync_single_for_cpu\n(..., dma_addr_t **proxyDMA**, size_t **size**)
+
+Kernel->Kernel:find entry corresponding\nto **proxyDMA** (contains\nall other addresses)
+
+activate Proxy
+Kernel->Proxy:<align:center>guest_message_header\n[operation = OP_DMA_ENC, address = **proxyDMA**, length = **size**]</align>
+
+Kernel->Proxy:**proxyShmem**
+
+activate shmem
+
+shmem<-Proxy:encrypt **proxyDMA** of\n**size** to **proxyShmem**
+
+Proxy-->Kernel:confirmation of completion
+
+Kernel<-shmem:decrypt **vmShmem** of **size** to **vmDMA**

@@ -1,0 +1,21 @@
+participantspacing equal
+participant Kernel
+rparticipant "Shared\nmemory" as shmem
+participant Proxy
+
+activate Kernel
+[->Kernel:dma_map_single\n(..., void \***vmDMA**, size_t **size**)
+
+activate shmem
+Kernel->shmem:encrypt **vmDMA** of **size** to **vmShmem**
+
+activate Proxy
+Kernel->Proxy:<align:center>guest_message_header\n[operation = OP_DMA_MAP, address = **proxyShmem**, length = **size**]</align>
+
+Proxy->Proxy:decrypt **proxyShmem**\nof **size** to **proxyDMA**
+
+Proxy-->Kernel: **proxyDMA**
+
+Kernel->Kernel:save addresses\nin entry
+
+[<-Kernel:**proxyDMA**
