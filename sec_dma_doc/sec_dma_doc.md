@@ -16,9 +16,9 @@ This file documents the implementation of the secure DMA communication between V
 ![Simple setup](disagg_doc-simple_setup.drawio.svg)
 
 The confidential virtual machine (CVM), which contains the device driver, communicates with the proxy process, which hosts the EDU device.  
-The EDU device is a simple QEMU PCI device supporting basic functionality (e.g. DMA).  
+The [EDU device](https://www.qemu.org/docs/master/specs/edu.html) is a simple QEMU PCI device supporting basic functionality (e.g. DMA).  
 All communication initiated by the driver to the device is intercepted by the kernel and converted into encrypted messages exchanged with the proxy process over the shared memory. This includes memory mapped I/O (MMIO, typically register-size) accesses (not documented here) and direct memory accesses (DMA).  
-Right now the proxy process (a QEMU instance) is emulating the EDU device with libvfio-user.
+Right now the proxy process (a QEMU instance) is emulating the EDU device with [libvfio-user](https://github.com/nutanix/libvfio-user).
 
 ## Supported kernel DMA API-calls
 
@@ -121,15 +121,38 @@ As there are many addresses, pointing to the different [address spaces](#address
 
 The sync API also accepts addresses not being the same as an address returned my dma_map_single. The provided address just has to be within the mapped region. This allows to just update a subset of data. The sequence diagrams do not show that explicitely.
 
-### Security
+## Security
 
-Because one of our design goals is security, the data written into the shared memory has to undergo modifications. In our case we use GCM-AES-256 as an AEAD method. The modifications are:
+Because one of our design goals is security, the data written into the shared memory has to undergo some modifications. In our case we use GCM-AES-256 as an AEAD method. The modifications are:
 
   1. Encryption: all data is encrypted with AES-256 in counter mode
   2. Authentication: a tag is created, which can be used to ensure integrity and authentication
 
 Until now, the key is a hard-coded value. The secure key exchange will be added later.  
-GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we increment after every operation (i.e. encrypt/decrypt). This ensures different ciphertext for the same plaintext.
-(TODO: Add key derivation function for the keys used for both operations as otherwise there might be the same plaintext/ciphertext)
+GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we increment after every operation (i.e. encrypt/decrypt). This ensures different ciphertext for the same plaintext. By providing a 12-byte IV there is no need for an additional GHash (TODO: add source).
 
-As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged within a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters, one for each of those regions.
+As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged within a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those regions.  
+(TODO: Create different keys for MMIO/DMA with KDF as otherwise there might be the same plain-/ciphertext pair)
+
+### Structure
+
+Every write to the shared memory will append the authentication tag to the encrypted data:
+
+![aead encrypt](disagg_doc-aead-structure.drawio.svg)
+
+When decrypting the data into trusted memory the authentication tag is checked.
+
+### Crypto Implementation Libraries
+
+The VM uses the in-kernel crypto API, which provides an implementation of GCM-AES-256.  
+The proxy (running in userspace) relies on OpenSSL as the crypto library, also providing GCM-AES-256.
+
+## Benchmarks
+
+The different states of the implementation which will be tested:
+
+  1. non-secure MMIO, non-secure DMA
+  2. secure MMIO, non-secure DMA
+  3. secure MMIO, secure DMA
+
+TODO
