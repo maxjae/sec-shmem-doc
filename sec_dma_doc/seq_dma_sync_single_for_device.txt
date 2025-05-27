@@ -6,16 +6,14 @@ participant Proxy
 activate Kernel
 [->Kernel:dma_sync_single_for_device\n(..., dma_addr_t **proxyDMA**, size_t **size**)
 
-Kernel->Kernel:find entry correspondig\nto **proxyDMA** (contains\nall other addresses)
+Kernel->Kernel:find entry correspondig\nto **proxyDMA** (contains\n other addresses)
 
 activate shmem
 
 Kernel->shmem:encrypt **vmDMA** of **size** to **vmShmem**
 
 activate Proxy
-Kernel->Proxy:<align:center>guest_message_header\n[operation = OP_DMA_DEC, address = **proxyShmem**, length = **size**]</align>
-
-Kernel->Proxy:**proxyDMA**
+Kernel->Proxy:<align:center>guest_message_header\n[operation = OP_DMA_DEC, address = **proxyDMA**, length = **size**]</align>
 
 shmem->Proxy:decrypt **proxyShmem** of\n**size** to **proxyDMA**
 

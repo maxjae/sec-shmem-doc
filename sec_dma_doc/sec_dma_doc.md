@@ -33,7 +33,7 @@ Expects a physically contigous virtual address of size, which is mapped and can 
         dma_unmap_single(struct device *dev, dma_addr_t dma_addr,
                          size_t size, enum dma_data_direction direction)
 Unmaps region which was previously mapped.  
-(TODO: does the dma region has to be invalidated?)
+(TODO: does the dma region has to be invalidated to prevent decryption if key leaks?)
 
         int
         dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
@@ -70,7 +70,7 @@ As this buffer is more or less a copy of the DMA region in the shared memory, wi
 
 The shared memory is divided into different regions.  
 The first two bytes are doorbell registers, used to synchronize the sending/receiving of messages.  
-The next bytes are reserverd for the exchange of messages (see [here](#message-format)) and other data.  
+The next bytes are reserverd for the exchange of messages (see [here](#message-format)) and other data (e.g. values to write or additional addresses for dma_sync).  
 Starting at the 256th byte is the proxyShmem address. This field is written to by the proxy during startup and can be read by the VM. (TODO: Change this; not encrypted)  
 The rest of the shared memory, from page 2 onward (i.e. starting at the 4096th byte), is available to DMA allocations.
 
@@ -111,11 +111,17 @@ Those entries are needed in order to be able to fulfill requests to the [sync-AP
 
 The following sequence diagrams depict the things happening after calling one of the supported DMA API functions.
 The messages and data are all exchanged through the shared memory in a confidential/authenticated/integer way, which is omitted in the sequence diagrams.  
-As there are many addresses, pointing to the different [address spaces](#addresses-overview), in play, the naming convention of [this section](#addresses-overview) is used.  
+As there are many addresses, pointing to the different address spaces, in play, [this](#addresses-overview) naming convention is used.  
+
+#### dma_map_single
 
 ![dma_map_single](seq_dma_map_single.png)
 
+#### dma_snyc_single_for_cpu
+
 ![dma_sync_single_for_cpu](seq_dma_sync_single_for_cpu.png)
+
+#### dma_sync_single_for_device
 
 ![dma_sync_single_for_device](seq_dma_sync_single_for_device.png)
 
@@ -128,10 +134,10 @@ Because one of our design goals is security, the data written into the shared me
   1. Encryption: all data is encrypted with AES-256 in counter mode
   2. Authentication: a tag is created, which can be used to ensure integrity and authentication
 
-Until now, the key is a hard-coded value. The secure key exchange will be added later.  
+Right now, the key is a hard-coded value. The secure key exchange will be added later.  
 GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we increment after every operation (i.e. encrypt/decrypt). This ensures different ciphertext for the same plaintext. By providing a 12-byte IV there is no need for an additional GHash (TODO: add source).
 
-As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged within a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those regions.  
+As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged during a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those types.  
 (TODO: Create different keys for MMIO/DMA with KDF as otherwise there might be the same plain-/ciphertext pair)
 
 ### Structure
@@ -142,10 +148,12 @@ Every write to the shared memory will append the authentication tag to the encry
 
 When decrypting the data into trusted memory the authentication tag is checked.
 
+As [this section](#protocol-sequence-diagram) states, the sync API also allows partial syncs. As the authentication tag is appended directly to the ciphertext it is possible that ciphertext, created during a previous DMA operation, is overwritten by the tag. This is no problem, as the ciphertext and tag are only read once. This happens in a synchronized manner.
+
 ### Crypto Implementation Libraries
 
 The VM uses the in-kernel crypto API, which provides an implementation of GCM-AES-256.  
-The proxy (running in userspace) relies on OpenSSL as the crypto library, also providing GCM-AES-256.
+The proxy (running in userspace) relies on an OpenSSL crypto library implementation of GCM-AES-256.
 
 ## Benchmarks
 
