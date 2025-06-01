@@ -22,7 +22,7 @@ Right now the proxy process (a QEMU instance) is emulating the EDU device with [
 
 ## Supported kernel DMA API-calls
 
-This section provides information about the DMA-API calls currently supported (implementation details for how this is done are provided [here](#implementation-details-for-dma)):
+This section provides information about the DMA-API calls currently supported (see [this section](#implementation-details-for-dma) for implementation details):
 
         dma_addr_t
         dma_map_single(struct device *dev, void *cpu_addr,
@@ -70,11 +70,17 @@ As this buffer is more or less a copy of the DMA region in the shared memory, wi
 
 The shared memory is divided into different regions.  
 The first two bytes are doorbell registers, used to synchronize the sending/receiving of messages.  
-The next bytes are reserverd for the exchange of messages (see [here](#message-format)) and other data (e.g. values to write or additional addresses for dma_sync).  
-Starting at the 256th byte is the proxyShmem address. This field is written to by the proxy during startup and can be read by the VM. (TODO: Change this; not encrypted)  
+The next bytes are reserverd for the [exchange of messages](#message-format) and other data (e.g. values to write or additional addresses for dma_sync).  
+Starting at the 256th byte is the proxyShmem address. This field is written to by the proxy during startup and can be read by the VM.
 The rest of the shared memory, from page 2 onward (i.e. starting at the 4096th byte), is available to DMA allocations.
 
-Allmost all data written to the shared memory is encrypted and contains an authentication tag (see [here](#security)). Exception to this are the doorbell registers and the proxyShmem address (TODO).
+Allmost all data written to the shared memory is encrypted and contains an [authentication tag](#security). Exception to this are the doorbell registers.
+
+#### Management of available space
+
+The space, not used in a mapping, is called 'free'. Those free spaces are tracked in a linked list.  
+Whenever a new mapping request is received, this free list is searched for the first big enough region (**First fit**).  
+With an unmap the, now free, region is inserted back into the list and made available for future mappings.
 
 ### Message format
 
@@ -90,22 +96,20 @@ There a several types of operations. Those that are used in the DMA implementati
 
 ### In-kernel entry structure
 
-To keep track of all DMA mappings and their addresses, the kernel tracks all of those in entriy structures:
+To keep track of all DMA mappings and their addresses, the kernel manages a red-black tree, which consists of entry nodes:
 
         struct disagg_dma_entry {
-                dma_addr_t proxyDma;
-                void *proxyShmem;
-                void *hostShmem;
-                void *hostAddr;
+                struct rb_node node;
+                void *vmDMA;
+                dma_addr_t proxyDMA;
                 size_t size;
         };
 
-(TODO: change names in code, to correspond to [this](#addresses-overview))
-
 Those entries are only kept kernel-side, not on the proxy.
 
-Of those addresses only the vmDMA could be any value. All others are in a specified range. That means we only have to save one of vmShmem, proxyDMA and proxyShmem as we can calculate all the others when having just one.  
-Those entries are needed in order to be able to fulfill requests to the [sync-API](#protocol-sequence-diagram), as the caller only provides the proxyDMA address. So we first have to get corresponding addresses to know where we have to do encryption/decryption/copying from/to.
+Of the addresses only the vmDMA could be any value. proxyDMA is surely in a specified range. That means when saving just proxyDMA, both vmShmem and proxyShmem can be calculated by adding an offset to proxyDMA.  
+Those entries are needed in order to be able to fulfill requests to the [sync-API](#protocol-sequence-diagram), as the caller only provides the proxyDMA address. So we first have to get corresponding addresses to know where we have to do encryption/decryption/copying from/to.  
+As soon as the region is unmaped, the entry is removed from the red-black tree.
 
 ### Protocol (sequence diagram)
 
@@ -157,10 +161,9 @@ The proxy (running in userspace) relies on an OpenSSL crypto library implementat
 
 ## Benchmarks
 
-The different states of the implementation which will be tested:
+![benchmark dma_map_single](benchmark-dma_map_single.svg)
 
-  1. non-secure MMIO, non-secure DMA
-  2. secure MMIO, non-secure DMA
-  3. secure MMIO, secure DMA
+The x-axis shows the size of the mapped DMA buffer.
 
-TODO
+As expected, the introduction of safety features, in the form of GCM-AES, does add overhead. This is most notably in case of large DMA transfers.  
+In case of 1MB non-secure DMA, the use of secure MMIO does add overhead of about 2% compared to non-secure MMIO.
