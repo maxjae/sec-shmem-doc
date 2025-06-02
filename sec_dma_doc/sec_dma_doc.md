@@ -138,8 +138,10 @@ Because one of our design goals is security, the data written into the shared me
   1. Encryption: all data is encrypted with AES-256 in counter mode
   2. Authentication: a tag is created, which can be used to ensure integrity and authentication
 
-Right now, the key is a hard-coded value. The secure key exchange will be added later.  
-GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we increment after every operation (i.e. encrypt/decrypt). This ensures different ciphertext for the same plaintext. By providing a 12-byte IV there is no need for an additional GHash (TODO: add source).
+Right now, the key is a hard-coded value. The secure key exchange will be added later.
+
+GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we [increment after every operation](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf#page=28) (i.e. encrypt/decrypt). This ensures different ciphertexts for the same plaintexts, even if the key is the same. By providing a 12-byte IV there is [no need for an additional GHash](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf#page=23).  
+The way this works is that 32 bits (to be precise 0^31 || 1) are appended to the IV to result in 128 bits. This 32-bits value is then [incremented after every internal block encryption](https://csrc.nist.rip/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-spec.pdf#page=6). Thus incrementing our own IV after every operation ensures different ciphertext for same plaintext.
 
 As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged during a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those types.  
 (TODO: Create different keys for MMIO/DMA with KDF as otherwise there might be the same plain-/ciphertext pair)
