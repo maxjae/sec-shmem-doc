@@ -18,7 +18,7 @@ This file gives an overview of the multiproc-qemu project, which aims to seperat
 
 The new structure would be similiar to vfio-user with the difference of no communication via a UNIX socket, but only over the shared memory. This would then also allow to place proxy and VM on different hosts.
 
-![new structure](disagg_doc-restructuring.drawio.svg)
+![new structure](res/disagg_doc-restructuring.drawio.svg)
 
 As the communication via MMIO and DMA is already implemented over shared memory, the focus now lies on accesses to config space.  
 In order to get completely rid of vfio-user there is also the need for a fake device, which is exposed by QEMU to the VM as the real device.

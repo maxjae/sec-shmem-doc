@@ -1,11 +1,3 @@
----
-geometry: "left=25mm,right=25mm,top=10mm,bottom=25mm"
-output: pdf_document
-fontsize: 14pt
-monofont: "JetBrains Mono"
-mainfont: "DejaVu Serif"
-toc: true
----
 
 # Secure DMA documentation
 
@@ -13,7 +5,7 @@ This file documents the implementation of the secure DMA communication between V
 
 ## Setup
 
-![Simple setup](disagg_doc-simple_setup.drawio.svg)
+![Simple setup](res/disagg_doc-simple_setup.drawio.svg)
 
 The confidential virtual machine (CVM), which contains the device driver, communicates with the proxy process, which hosts the EDU device.  
 The [EDU device](https://www.qemu.org/docs/master/specs/edu.html) is a simple QEMU PCI device supporting basic functionality (e.g. DMA).  
@@ -55,7 +47,7 @@ Synchronises the specified region for the device, i.e. updates it to the state w
 
 In order to understand the details of implementation, one first has to get an overview of the four different addresses:
 
-![Address spaces](disagg_doc-address_spaces.drawio.svg)
+![Address spaces](res/disagg_doc-address_spaces.drawio.svg)
 
 The shared memory is a PCI device in case of the VM and a file on the host system in case of the proxy. In both scenarios the shared memory is mapped into address space (kernel virtual address space for VM, **vmShmem**; user virtual address space for proxy process, **proxyShmem**). This results in two different addresses for access to the shared memory region.
 
@@ -66,21 +58,23 @@ As this buffer is more or less a copy of the DMA region in the shared memory, wi
 
 ### Shared memory structure
 
-![Shared memory](disagg_doc-shared_memory.drawio.svg)
+![Shared memory](res/disagg_doc-shared_memory.drawio.svg)
 
 The shared memory is divided into different regions.  
 The first two bytes are doorbell registers, used to synchronize the sending/receiving of messages.  
-The next bytes are reserverd for the [exchange of messages](#message-format) and other data (e.g. values to write or additional addresses for dma_sync).  
-Starting at the 256th byte is the proxyShmem address. This field is written to by the proxy during startup and can be read by the VM.
+The next bytes are reserverd for the [exchange of messages](#message-format) and other data (e.g. the value to write, in case of an MMIO write, or additional addresses for dma_syncs). The size of this region depends on the maximum message size, which is 13 bytes for a [struct_message_header](#message-format), and on the appended [authentication tag](#security), which is 16 bytes.  
+Starting from the 31th byte are padding bytes until the start of next page (in our case 4K pages).  
 The rest of the shared memory, from page 2 onward (i.e. starting at the 4096th byte), is available to DMA allocations.
 
-Allmost all data written to the shared memory is encrypted and contains an [authentication tag](#security). Exception to this are the doorbell registers.
+Right now the shared memory is limited to a size of 1MB. This can be adjusted at will and requires only small modifications.
+
+With exception to the doorbell registers, all data written to the shared memory is encrypted and contains an [authentication tag](#security).
 
 #### Management of available space
 
 The space, not used in a mapping, is called 'free'. Those free spaces are tracked in a linked list.  
 Whenever a new mapping request is received, this free list is searched for the first big enough region (**First fit**).  
-With an unmap the, now free, region is inserted back into the list and made available for future mappings.
+With an unmap the newly freed region is inserted back into the list and made available for future mappings.
 
 ### Message format
 
@@ -119,21 +113,21 @@ As there are many addresses, pointing to the different address spaces, in play, 
 
 #### dma_map_single
 
-![dma_map_single](seq_dma_map_single.png)
+![dma_map_single](res/seq_dma_map_single.png)
 
 #### dma_snyc_single_for_cpu
 
-![dma_sync_single_for_cpu](seq_dma_sync_single_for_cpu.png)
+![dma_sync_single_for_cpu](res/seq_dma_sync_single_for_cpu.png)
 
 #### dma_sync_single_for_device
 
-![dma_sync_single_for_device](seq_dma_sync_single_for_device.png)
+![dma_sync_single_for_device](res/seq_dma_sync_single_for_device.png)
 
 The sync API also accepts addresses not being the same as an address returned my dma_map_single. The provided address just has to be within the mapped region. This allows to just update a subset of data. The sequence diagrams do not show that explicitely.
 
 ## Security
 
-Because one of our design goals is security, the data written into the shared memory has to undergo some modifications. In our case we use GCM-AES-256 as an AEAD method. The modifications are:
+Because one of our design goals is security, the data written into the shared memory has to undergo some modifications. In our case we use [GCM-AES-256](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf) as an AEAD method. The modifications are:
 
   1. Encryption: all data is encrypted with AES-256 in counter mode
   2. Authentication: a tag is created, which can be used to ensure integrity and authentication
@@ -143,14 +137,14 @@ Right now, the key is a hard-coded value. The secure key exchange will be added 
 GCM needs an initialization vector (IV) as an input to AES CTR mode. We provide a counter as an IV, which we [increment after every operation](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf#page=28) (i.e. encrypt/decrypt). This ensures different ciphertexts for the same plaintexts, even if the key is the same. By providing a 12-byte IV there is [no need for an additional GHash](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf#page=23).  
 The way this works is that 32 bits (to be precise 0^31 || 1) are appended to the IV to result in 128 bits. This 32-bits value is then [incremented after every internal block encryption](https://csrc.nist.rip/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-spec.pdf#page=6). Thus incrementing our own IV after every operation ensures different ciphertext for same plaintext.
 
-As there are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged during a [protocol](#protocol-sequence-diagram), the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those types.  
+There are two encrypted sections in the [shared memory](#shared-memory-structure), one being the messages exchanged during a [protocol](#protocol-sequence-diagram), and the other being the DMA region. To handle this there are two different counters (and therefore different IVs), one for each of those types.  
 (TODO: Create different keys for MMIO/DMA with KDF as otherwise there might be the same plain-/ciphertext pair)
 
 ### Structure
 
 Every write to the shared memory will append the authentication tag to the encrypted data:
 
-![aead encrypt](disagg_doc-aead-structure.drawio.svg)
+![aead encrypt](res/disagg_doc-aead-structure.drawio.svg)
 
 When decrypting the data into trusted memory the authentication tag is checked.
 
@@ -163,9 +157,8 @@ The proxy (running in userspace) relies on an OpenSSL crypto library implementat
 
 ## Benchmarks
 
-![benchmark dma_map_single](benchmark-dma_map_single.svg)
+![benchmark dma_map_single](res/throughput-dma_map_single.png)
 
 The x-axis shows the size of the mapped DMA buffer.
 
-As expected, the introduction of safety features, in the form of GCM-AES, does add overhead. This is most notably in case of large DMA transfers.  
-In case of 1MB non-secure DMA, the use of secure MMIO does add overhead of about 2% compared to non-secure MMIO.
+As expected, the introduction of safety features, in the form of GCM-AES, does add a significant overhead.
